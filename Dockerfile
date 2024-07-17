@@ -32,9 +32,10 @@ RUN sudo apt-get update && sudo apt-get install -y \
 RUN mkdir -p /home/docker/denoise-imu-gyro
 ADD ./requirements.txt /home/docker/denoise-imu-gyro/requirements.txt
 
-WORKDIR /home/docker
+WORKDIR /home/docker/denoise-imu-gyro
+
 RUN sudo python3 -m pip install --upgrade "pip < 19.2"
 RUN sudo python3 -m pip install --upgrade pip
 
 RUN sudo python3 -m pip install --pre torch  -f https://download.pytorch.org/whl/nightly/cu101/torch_nightly.html
-RUN sudo python3 -m pip install -r denoise-imu-gyro/requirements.txt
+RUN sudo python3 -m pip install -r requirements.txt
