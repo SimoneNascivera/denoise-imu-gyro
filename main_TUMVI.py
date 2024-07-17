@@ -7,7 +7,7 @@ import src.dataset as ds
 import numpy as np
 
 base_dir = os.path.dirname(os.path.realpath(__file__))
-data_dir = '/path/to/TUM/dataset'
+data_dir = os.path.join(base_dir, 'data/TUM')
 # test a given network
 # address = os.path.join(base_dir, 'results/TUM/2020_02_18_16_26_33')
 # or test the last trained network
@@ -42,9 +42,9 @@ dataset_params = {
         'dataset-room5_512_16',
         ],
     'val_seqs': [
-        'dataset-room2_512_16',
-        'dataset-room4_512_16',
-        'dataset-room6_512_16',
+        'dataset-room1_512_16',
+        'dataset-room3_512_16',
+        'dataset-room5_512_16',
         ],
     'test_seqs': [
         'dataset-room2_512_16',
@@ -52,7 +52,7 @@ dataset_params = {
         'dataset-room6_512_16'
         ],
     # size of trajectory during training
-    'N': 32 * 500, # should be integer * 'max_train_freq'
+    'N': 32 * 300, # should be integer * 'max_train_freq'
     'min_train_freq': 16,
     'max_train_freq': 32,
 }
