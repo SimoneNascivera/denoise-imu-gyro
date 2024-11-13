@@ -144,6 +144,7 @@ class LearningBasedProcessing:
             write(epoch, loss_epoch)
             scheduler.step(epoch)
             if epoch % freq_val == 0:
+                self.save_net()
                 loss = self.loop_val(dataset_val, criterion)
                 write_time(epoch, start_time)
                 best_loss = write_val(loss, best_loss)
@@ -182,6 +183,7 @@ class LearningBasedProcessing:
         with torch.no_grad():
             for i in range(len(dataset)):
                 us, xs = dataset[i]
+                #us = dataset.add_noise_non_batch(us.cuda())
                 hat_xs = self.net(us.cuda().unsqueeze(0))
                 loss = criterion(xs.cuda().unsqueeze(0), hat_xs)/len(dataset)
                 loss_epoch += loss.cpu()
@@ -281,6 +283,8 @@ class GyroLearningBasedProcessing(LearningBasedProcessing):
             # get data and estimate
             self.net_us = pload(self.address, seq, 'results.p')['hat_xs']
             self.raw_us, _ = dataset[i]
+            #self.noisy_us = dataset.add_noise_non_batch(self.raw_us.cuda())
+            
             N = self.net_us.shape[0]
             self.gyro_corrections =  (self.raw_us[:, :3] - self.net_us[:N, :3])
             self.ts = torch.linspace(0, N*self.dt, N)
@@ -323,41 +327,65 @@ class GyroLearningBasedProcessing(LearningBasedProcessing):
         self.gt['rpys'] *= l
 
     def integrate_with_quaternions_superfast(self, N, raw_us, net_us):
+    #def integrate_with_quaternions_superfast(self, N, raw_us, net_us, noisy_us=None):
         imu_qs = SO3.qnorm(SO3.qexp(raw_us[:, :3].cuda().double()*self.dt))
         net_qs = SO3.qnorm(SO3.qexp(net_us[:, :3].cuda().double()*self.dt))
+        #
+        #if noisy_us is not None:
+        #    noisy_qs =  SO3.qnorm(SO3.qexp(noisy_us[:, :3].cuda().double()*self.dt))
+        #
         Rot0 = SO3.qnorm(self.gt['qs'][:2].cuda().double())
         imu_qs[0] = Rot0[0]
         net_qs[0] = Rot0[0]
+        #if noisy_us is not None:
+        #    noisy_qs[0] = Rot0[0]
 
         N = np.log2(imu_qs.shape[0])
         for i in range(int(N)):
             k = 2**i
             imu_qs[k:] = SO3.qnorm(SO3.qmul(imu_qs[:-k], imu_qs[k:]))
             net_qs[k:] = SO3.qnorm(SO3.qmul(net_qs[:-k], net_qs[k:]))
+            #if noisy_us is not None:
+            #    noisy_qs[k:] = SO3.qnorm(SO3.qmul(noisy_qs[:-k], noisy_qs[k:]))
 
         if int(N) < N:
             k = 2**int(N)
             k2 = imu_qs[k:].shape[0]
             imu_qs[k:] = SO3.qnorm(SO3.qmul(imu_qs[:k2], imu_qs[k:]))
             net_qs[k:] = SO3.qnorm(SO3.qmul(net_qs[:k2], net_qs[k:]))
+            #if noisy_us is not None:
+            #    noisy_qs[k:] = SO3.qnorm(SO3.qmul(noisy_qs[:k2], noisy_qs[k:]))
 
         imu_Rots = SO3.from_quaternion(imu_qs).float()
         net_Rots = SO3.from_quaternion(net_qs).float()
+        #if noisy_us is not None:
+        #    noisy_Rots = SO3.from_quaternion(noisy_qs).float()
+        #
+        #if noisy_us is not None:
+        #    return net_qs.cpu(), imu_Rots, net_Rots, noisy_Rots
+        #else:
         return net_qs.cpu(), imu_Rots, net_Rots
 
     def plot_gyro(self):
         N = self.raw_us.shape[0]
         raw_us = self.raw_us[:, :3]
         net_us = self.net_us[:, :3]
-
+        #noisy_us = self.noisy_us[:, :3]
+        #
+        #net_qs, imu_Rots, net_Rots, noisy_Rots = self.integrate_with_quaternions_superfast(N,
+        #raw_us, net_us, noisy_us)
         net_qs, imu_Rots, net_Rots = self.integrate_with_quaternions_superfast(N,
         raw_us, net_us)
         imu_rpys = 180/np.pi*SO3.to_rpy(imu_Rots).cpu()
         net_rpys = 180/np.pi*SO3.to_rpy(net_Rots).cpu()
         self.plot_orientation(imu_rpys, net_rpys, N)
         self.plot_orientation_error(imu_Rots, net_Rots, N)
+        #noisy_rpys = 180/np.pi*SO3.to_rpy(noisy_Rots).cpu()
+        #self.plot_orientation(imu_rpys, net_rpys, noisy_rpys, N)
+        #self.plot_orientation_error(imu_Rots, net_Rots, noisy_Rots, N)
 
     def plot_orientation(self, imu_rpys, net_rpys, N):
+    #def plot_orientation(self, imu_rpys, net_rpys, noisy_rpys, N):
         title = "Orientation estimation"
         gt = self.gt['rpys'][:N]
         fig, axs = plt.subplots(3, 1, sharex=True, figsize=self.figsize)
@@ -369,13 +397,16 @@ class GyroLearningBasedProcessing(LearningBasedProcessing):
             axs[i].plot(self.ts, gt[:, i], color='black', label=r'ground truth')
             axs[i].plot(self.ts, imu_rpys[:, i], color='red', label=r'raw IMU')
             axs[i].plot(self.ts, net_rpys[:, i], color='blue', label=r'net IMU')
+            #axs[i].plot(self.ts, noisy_rpys[:, i], color='green', label=r'noisy IMU')
             axs[i].set_xlim(self.ts[0], self.ts[-1])
         self.savefig(axs, fig, 'orientation')
 
     def plot_orientation_error(self, imu_Rots, net_Rots, N):
+    #def plot_orientation_error(self, imu_Rots, net_Rots, noisy_Rots, N):
         gt = self.gt['Rots'][:N].cuda()
         raw_err = 180/np.pi*SO3.log(bmtm(imu_Rots, gt)).cpu()
         net_err = 180/np.pi*SO3.log(bmtm(net_Rots, gt)).cpu()
+        #noisy_err = 180/np.pi*SO3.log(bmtm(noisy_Rots, gt)).cpu()
         title = "$SO(3)$ orientation error"
         fig, axs = plt.subplots(3, 1, sharex=True, figsize=self.figsize)
         axs[0].set(ylabel='roll (deg)', title=title)
@@ -385,7 +416,8 @@ class GyroLearningBasedProcessing(LearningBasedProcessing):
         for i in range(3):
             axs[i].plot(self.ts, raw_err[:, i], color='red', label=r'raw IMU')
             axs[i].plot(self.ts, net_err[:, i], color='blue', label=r'net IMU')
-            axs[i].set_ylim(-10, 10)
+            #axs[i].plot(self.ts, noisy_err[:, i], color='green', label=r'noisy IMU')
+            axs[i].set_ylim(-30, 30)
             axs[i].set_xlim(self.ts[0], self.ts[-1])
         self.savefig(axs, fig, 'orientation_error')
 
