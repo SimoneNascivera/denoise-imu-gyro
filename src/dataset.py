@@ -54,7 +54,7 @@ class BaseDataset(Dataset):
         mondict = self.load_seq(i)
         N_max = mondict['xs'].shape[0]
         if self._train: # random start
-            n0 = torch.randint(0, self.max_train_freq, (1, ))
+            n0 = 0 #torch.randint(0, self.max_train_freq, (1, ))
             nend = n0 + self.N
         elif self._val: # end sequence
             n0 = self.max_train_freq + self.N
@@ -64,6 +64,8 @@ class BaseDataset(Dataset):
             nend = N_max - (N_max % self.max_train_freq)
         u = mondict['us'][n0: nend]
         x = mondict['xs'][n0: nend]
+        #u = (mondict['us'][n0: nend*10], mondict['us_ts'][n0: nend*10])
+        #x = (mondict['xs'][n0: nend], mondict['xs_ts'][n0: nend])
         return u, x
 
     def __len__(self):
@@ -82,6 +84,19 @@ class BaseDataset(Dataset):
         u = u + noise + b0.transpose(1, 2)
         return u
 
+    def add_noise_non_batch(self, u):
+        """Add Gaussian noise and bias to input"""
+        noise = torch.randn_like(u)
+        noise[:, :3] = noise[:, :3] * self.imu_std[0]
+        noise[:, 3:6] = noise[:, 3:6] * self.imu_std[1]
+
+        # bias repeatability (without in run bias stability)
+        b0 = self.uni.sample(u[0].shape).cuda()
+        b0[:, :3] = b0[:, :3] * self.imu_b0[0]
+        b0[:, 3:6] =  b0[:, 3:6] * self.imu_b0[1]
+        u = u + noise + b0.transpose(0, 1)
+        return u
+    
     def init_train(self):
         self._train = True
         self._val = False
@@ -94,9 +109,11 @@ class BaseDataset(Dataset):
         return self._length
 
     def load_seq(self, i):
+        print("Load sequence: ", self.sequences[i])
         return pload(self.predata_dir, self.sequences[i] + '.p')
 
     def load_gt(self, i):
+        print("Load gt sequence: ", self.sequences[i])
         return pload(self.predata_dir, self.sequences[i] + '_gt.p')
 
     def init_normalize_factors(self, train_seqs):
@@ -225,10 +242,10 @@ class EUROCDataset(BaseDataset):
             ts = imu[:, 0]/1e9
 
             # interpolate
-            gt = self.interpolate(gt, gt[:, 0]/1e9, ts)
+            gt_interp = self.interpolate(gt, gt[:, 0]/1e9, ts)
 
             # take ground truth position
-            p_gt = gt[:, 1:4]
+            p_gt = gt_interp[:, 1:4]
             p_gt = p_gt - p_gt[0]
 
             # take ground true quaternion pose
@@ -236,14 +253,18 @@ class EUROCDataset(BaseDataset):
             q_gt = q_gt / q_gt.norm(dim=1, keepdim=True)
             Rot_gt = SO3.from_quaternion(q_gt.cuda(), ordering='wxyz').cpu()
 
+            q_gt = torch.Tensor(gt_interp[:, 4:8]).double()
+            q_gt = q_gt / q_gt.norm(dim=1, keepdim=True)
+
             # convert from numpy
             p_gt = torch.Tensor(p_gt).double()
-            v_gt = torch.tensor(gt[:, 8:11]).double()
+            v_gt = torch.tensor(gt_interp[:, 8:11]).double()
+            imu_ts = imu[:, 0]
             imu = torch.Tensor(imu[:, 1:]).double()
 
             # compute pre-integration factors for all training
             mtf = self.min_train_freq
-            dRot_ij = bmtm(Rot_gt[:-mtf], Rot_gt[mtf:])
+            dRot_ij = bmtm(Rot_gt[:-1], Rot_gt[1:])
             dRot_ij = SO3.dnormalize(dRot_ij.cuda())
             dxi_ij = SO3.log(dRot_ij).cpu()
 
@@ -251,6 +272,8 @@ class EUROCDataset(BaseDataset):
             mondict = {
                 'xs': dxi_ij.float(),
                 'us': imu.float(),
+                'xs_ts' : gt[:, 0],
+                'us_ts' : imu_ts,
             }
             pdump(mondict, self.predata_dir, sequence + ".p")
             # save ground truth
@@ -261,7 +284,8 @@ class EUROCDataset(BaseDataset):
                 'ps': p_gt.float(),
             }
             pdump(mondict, self.predata_dir, sequence + "_gt.p")
-
+        print("Finished pickeling, restart pipeline")
+        exit(0)
 
 class TUMVIDataset(BaseDataset):
     """
